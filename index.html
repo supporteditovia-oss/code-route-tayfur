@@ -413,18 +413,49 @@ photoInput.addEventListener("change",async()=>{
     const url=URL.createObjectURL(f);
     const img=new Image();
     await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url;});
-    const MAX=1600,echelle=Math.min(1,MAX/Math.max(img.width,img.height));
-    const cv=document.createElement("canvas");
-    cv.width=Math.round(img.width*echelle);cv.height=Math.round(img.height*echelle);
-    cv.getContext("2d").drawImage(img,0,0,cv.width,cv.height);
+    const MAX=2200,echelle=Math.min(1,MAX/Math.max(img.width,img.height));
+    const W=Math.round(img.width*echelle),H=Math.round(img.height*echelle);
+    const cv0=document.createElement("canvas");cv0.width=W;cv0.height=H;
+    cv0.getContext("2d").drawImage(img,0,0,W,H);
     URL.revokeObjectURL(url);
-    const blob=await new Promise(r=>cv.toBlob(r,"image/jpeg",0.9));
+    // Version NETTOYEE : noir et blanc fort contraste (aide beaucoup la lecture)
+    const cv=document.createElement("canvas");cv.width=W;cv.height=H;
+    const ctx=cv.getContext("2d");ctx.drawImage(cv0,0,0);
+    const id=ctx.getImageData(0,0,W,H),px=id.data;
+    let somme=0;const gris=new Float32Array(W*H);
+    for(let i=0,j=0;i<px.length;i+=4,j++){const g=0.299*px[i]+0.587*px[i+1]+0.114*px[i+2];gris[j]=g;somme+=g;}
+    const moy=somme/(W*H),seuil=moy*0.92;
+    for(let i=0,j=0;i<px.length;i+=4,j++){const v=gris[j]<seuil?0:255;px[i]=px[i+1]=px[i+2]=v;px[i+3]=255;}
+    ctx.putImageData(id,0,0);
+    const blobNet=await new Promise(r=>cv.toBlob(r,"image/png"));
+    const blobBrut=await new Promise(r=>cv0.toBlob(r,"image/jpeg",0.92));
     if(!ocrWorker){
       photoStatut.textContent="📷 Préparation du lecteur (une seule fois)…";
       ocrWorker=await Tesseract.createWorker("fra",1,{workerPath:"worker.min.js",corePath:"./",langPath:"./",gzip:true,logger:m=>{if(m.status==="recognizing text")photoStatut.textContent="📷 Lecture de la photo… "+Math.round(m.progress*100)+"%";}});
+      try{await ocrWorker.setParameters({tessedit_pageseg_mode:"6"});}catch(e){}
     }
-    const sortie=await ocrWorker.recognize(blob);
-    const txt=texteNettoye((sortie.data.text||"").replace(/\s+/g," ").trim());
+    const qualite=t=>{const n=texteNettoye(t);const mk=(n.match(/(?:^|\s)[A-D]\s*[.):]\s+/g)||[]).length;return n.length+mk*120;};
+    let sortie=await ocrWorker.recognize(blobNet);
+    let brut=(sortie.data.text||"");
+    if(qualite(brut)<260){
+      photoStatut.textContent="📷 Je relis la photo autrement…";
+      const s2=await ocrWorker.recognize(blobBrut);
+      const b2=(s2.data.text||"");
+      if(qualite(b2)>qualite(brut))brut=b2;
+    }
+    let txt=texteNettoye(brut.replace(/\s+/g," ").trim());
+    // Secours : si l OCR a lu les choix en liste numerotee 1. 2. 3. 4., on les remet en lettres
+    const ch0=choixDepuisTexte(txt);
+    if(!(ch0&&ch0.length)){
+      const chiffres=[...txt.matchAll(/(?:^|\s)([1-4])\s*[.)]\s+/g)].map(m=>+m[1]);
+      if(chiffres.length>=3&&chiffres[0]===1&&chiffres[1]===2&&chiffres[2]===3){
+        let attendu=1;
+        txt=txt.replace(/((?:^|\s))([1-4])(\s*[.)]\s+)/g,(m,pre,d,ponct)=>{
+          if(+d===attendu&&attendu<=4){attendu++;return pre+"ABCD"[+d-1]+". ";}
+          return m;
+        });
+      }
+    }
     if(txt.length<8){photoStatut.textContent="😕 Texte illisible : reprends la photo bien droite, de près, avec de la lumière.";return;}
     photoStatut.textContent="✅ Texte lu, je cherche la réponse…";
     input.value=txt;btnX.style.display="block";
