@@ -519,6 +519,13 @@ photoInput.addEventListener("change",async()=>{
     for(let i=0,j=0;i<px.length;i+=4,j++){const v=gris[j]<seuil?0:255;px[i]=px[i+1]=px[i+2]=v;px[i+3]=255;}
     ctx.putImageData(id,0,0);
     const blobNet=await new Promise(r=>cv.toBlob(r,"image/png"));
+    // Version INVERSEE : pour les textes blancs sur fond sombre (ecrans en mode nuit)
+    const cvI=document.createElement("canvas");cvI.width=W;cvI.height=H;
+    const ctxI=cvI.getContext("2d");ctxI.drawImage(cv,0,0);
+    const idI=ctxI.getImageData(0,0,W,H),pxI=idI.data;
+    for(let i=0;i<pxI.length;i+=4){const v=255-pxI[i];pxI[i]=pxI[i+1]=pxI[i+2]=v;pxI[i+3]=255;}
+    ctxI.putImageData(idI,0,0);
+    const blobInv=await new Promise(r=>cvI.toBlob(r,"image/png"));
     const blobBrut=await new Promise(r=>cv0.toBlob(r,"image/jpeg",0.92));
     if(!ocrWorker){
       photoStatut.textContent="📷 Préparation du lecteur (une seule fois)…";
@@ -530,6 +537,11 @@ photoInput.addEventListener("change",async()=>{
     let brut=(sortie.data.text||"");
     if(qualite(brut)<260){
       photoStatut.textContent="📷 Je relis la photo autrement…";
+      const sI=await ocrWorker.recognize(blobInv);
+      const bI=(sI.data.text||"");
+      if(qualite(bI)>qualite(brut))brut=bI;
+    }
+    if(qualite(brut)<260){
       const s2=await ocrWorker.recognize(blobBrut);
       const b2=(s2.data.text||"");
       if(qualite(b2)>qualite(brut))brut=b2;
@@ -554,6 +566,11 @@ photoInput.addEventListener("change",async()=>{
       if(ip0>=0){ photoStatut.textContent=""; afficherPanneau(ip0); return; }
       photoStatut.textContent="😕 Texte illisible : reprends la photo bien droite, de près, avec de la lumière.";return;
     }
+    // Garde anti-charabia : si le texte lu ne contient presque aucun mot francais, on ne cherche pas (sinon reponses au hasard)
+    const NOYAU=["je","de","la","le","les","un","une","est","dans","sur","avec","pour","pas","plus","vous","dois","peut","etre","cette","aux","des","qui","que","au","en","et","ou","si","par","mon","ma","mes","vehicule","route","vitesse","panneau","conducteur","voiture","feu","priorite","distance","interdit","obligatoire","gauche","droite","devant","suis","roule","annonc","present","cas","temps","pluie","metres","second"];
+    const toksG=norm(txt).split(" ").filter(w=>w.length>=2);
+    const reconnusG=toksG.filter(w=>NOYAU.indexOf(w)>=0).length;
+    if(toksG.length>=5&&reconnusG<3){photoStatut.textContent="😕 Photo illisible : le texte lu est du charabia. Reprends la photo bien droite, de près, sans reflet — ou choisis une capture d'écran dans tes photos.";return;}
     photoStatut.textContent="✅ Texte lu, je cherche la réponse…";
     input.value=txt;btnX.style.display="block";
     const res=chercher(txt);
