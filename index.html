@@ -26,6 +26,12 @@ header p{margin:3px 0 0;font-size:14px;opacity:.85}
 .recherche button{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:var(--fond);width:38px;height:38px;border-radius:50%;font-size:17px;color:var(--gris);display:none}
 .photorow{margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 #btnPhoto{border:2px solid #ffd34d;background:rgba(255,255,255,.08);color:#fff;font-size:16px;font-weight:700;padding:9px 14px;border-radius:999px;cursor:pointer}
+#btnPhotoIA{border:2px solid #7dd3fc;background:rgba(255,255,255,.08);color:#fff;font-size:16px;font-weight:700;padding:9px 14px;border-radius:999px;cursor:pointer;margin-left:8px}
+#iaBox{margin-top:10px;background:rgba(255,255,255,.08);border:1px solid rgba(125,211,252,.5);border-radius:12px;padding:10px 12px}
+#iaBox .iaNote{margin:0 0 8px;font-size:13px;color:#e0f2fe}
+#iaCle{width:100%;box-sizing:border-box;padding:9px 10px;border-radius:8px;border:1px solid #7dd3fc;font-size:15px;margin-bottom:8px}
+#iaCleBtn{background:#0284c7;color:#fff;border:none;font-weight:700;padding:9px 14px;border-radius:999px;cursor:pointer;font-size:15px}
+.repIA{white-space:pre-wrap}
 #photoStatut{color:#dceeff;font-size:14px}
 .repPhoto{background:#e8f7ee;border:2px solid #1d9e57;border-radius:16px;padding:20px 16px;text-align:center;margin-bottom:14px}
 .repPhotoLettres{font-size:32px;font-weight:800;color:#0d6e3c;line-height:1.15}
@@ -91,9 +97,16 @@ footer{text-align:center;color:var(--gris);font-size:13.5px;padding:0 20px 30px}
   </div>
   <div class="photorow">
     <button id="btnPhoto" type="button">📷 Photo d'une question</button>
+    <button id="btnPhotoIA" type="button">🤖 Photo IA (voit tout)</button>
     <span id="photoStatut"></span>
   </div>
+  <div id="iaBox" hidden>
+    <p class="iaNote">🤖 La Photo IA envoie ta photo à Gemini (Google) : elle marche **avec internet**. Ta clé reste **uniquement dans ton téléphone**.</p>
+    <input id="iaCle" type="password" placeholder="Colle ta clé API Gemini ici" autocomplete="off">
+    <button id="iaCleBtn" type="button">Enregistrer la clé</button>
+  </div>
   <input type="file" id="photoInput" accept="image/*" hidden>
+  <input type="file" id="photoIAInput" accept="image/*" hidden>
 </header>
 <main>
   <!-- ACCUEIL -->
@@ -483,6 +496,61 @@ photoInput.addEventListener("change",async()=>{
     setTimeout(()=>{photoStatut.textContent="";},5000);
   }catch(e){
     photoStatut.textContent="😕 La lecture a échoué. Réessaie avec une photo plus nette.";
+  }
+});
+
+/* PHOTO IA — Gemini voit la photo (internet requis). La cle reste dans le telephone. */
+const btnPhotoIA=document.getElementById("btnPhotoIA"),photoIAInput=document.getElementById("photoIAInput"),iaBox=document.getElementById("iaBox"),iaCle=document.getElementById("iaCle"),iaCleBtn=document.getElementById("iaCleBtn");
+function cleIA(){try{return localStorage.getItem("cleGemini")||"";}catch(e){return"";}}
+iaCleBtn.addEventListener("click",()=>{
+  const v=iaCle.value.trim();
+  if(v.length<20){photoStatut.textContent="😕 Cette clé semble trop courte. Vérifie le copier-coller.";return;}
+  try{localStorage.setItem("cleGemini",v);}catch(e){}
+  iaBox.hidden=true;iaCle.value="";
+  photoStatut.textContent="✅ Clé enregistrée dans ton téléphone. Reprends ta photo IA.";
+});
+btnPhotoIA.addEventListener("click",()=>{
+  if(!cleIA()){iaBox.hidden=false;iaCle.focus();photoStatut.textContent="🔑 Une seule fois : colle ta clé Gemini, elle reste dans ton téléphone.";return;}
+  photoIAInput.click();
+});
+photoIAInput.addEventListener("change",async()=>{
+  const f=photoIAInput.files&&photoIAInput.files[0];photoIAInput.value="";
+  if(!f)return;
+  const cle=cleIA();
+  if(!cle){iaBox.hidden=false;return;}
+  photoStatut.textContent="🤖 Gemini regarde ta photo…";
+  try{
+    const url=URL.createObjectURL(f);
+    const img=new Image();
+    await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url;});
+    const MAX=1280,echelle=Math.min(1,MAX/Math.max(img.width,img.height));
+    const cv=document.createElement("canvas");
+    cv.width=Math.round(img.width*echelle);cv.height=Math.round(img.height*echelle);
+    cv.getContext("2d").drawImage(img,0,0,cv.width,cv.height);
+    URL.revokeObjectURL(url);
+    const dataUrl=cv.toDataURL("image/jpeg",0.85);
+    const b64=dataUrl.split(",")[1];
+    const consigne="Tu es un expert du code de la route français, règles en vigueur en 2026. Regarde cette photo : c'est une question d'examen du code de la route avec ses réponses proposées (A, B, C, D). Donne la ou les bonnes réponses. Format OBLIGATOIRE de ta réponse, sans rien d'autre : première ligne « ✅ Réponse : X » (mets les bonnes lettres, par exemple « B » ou « B et C »), puis une deuxième ligne avec UNE seule phrase courte qui explique pourquoi, en français simple. Si la photo n'est pas une question de code de la route ou si la bonne réponse ne peut pas être déterminée, réponds uniquement : « ❓ Je ne peux pas déterminer la réponse sur cette photo. »";
+    const ctrl=new AbortController();const delai=setTimeout(()=>ctrl.abort(),45000);
+    const rep=await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",{method:"POST",signal:ctrl.signal,headers:{"Content-Type":"application/json","x-goog-api-key":cle},body:JSON.stringify({contents:[{parts:[{text:consigne},{inline_data:{mime_type:"image/jpeg",data:b64}}]}]})});
+    clearTimeout(delai);
+    if(!rep.ok){
+      if(rep.status===400||rep.status===401||rep.status===403){photoStatut.textContent="😕 Gemini refuse cette clé. Touche le bouton Photo IA pour la remplacer.";try{localStorage.removeItem("cleGemini");}catch(e){} iaBox.hidden=false;}
+      else if(rep.status===429){photoStatut.textContent="😕 Trop de demandes d'un coup. Attends une minute et réessaie.";}
+      else{photoStatut.textContent="😕 Gemini ne répond pas (code "+rep.status+"). Réessaie.";}
+      return;
+    }
+    const data=await rep.json();
+    const texte=(((data.candidates||[])[0]||{}).content||{}).parts;
+    const reponse=(texte||[]).map(p=>p.text||"").join("").trim();
+    if(!reponse){photoStatut.textContent="😕 Réponse vide de Gemini. Réessaie avec une photo plus nette.";return;}
+    const el=document.getElementById("resultats");
+    document.getElementById("titre-resultats").textContent="🤖 Réponse de la Photo IA";
+    el.innerHTML='<div class="repPhoto"><div class="repPhotoTexte repIA">'+esc(reponse)+'</div><div class="repDouteNote">Réponse donnée par Gemini (internet). En cas de doute, vérifie avec la recherche du cahier.</div></div>';
+    montrer("resultats");
+    photoStatut.textContent="";
+  }catch(e){
+    photoStatut.textContent="😕 Pas de connexion internet : la Photo IA a besoin d'internet. Le reste de l'application marche sans.";
   }
 });
 
